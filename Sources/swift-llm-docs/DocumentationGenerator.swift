@@ -274,12 +274,6 @@ struct DocumentationGenerator {
         try? fileManager.removeItem(at: output)
         try fileManager.createDirectory(at: output, withIntermediateDirectories: true)
 
-        // Copy manifest
-        let manifestName = "\(target)-markdown-manifest.json"
-        let sourceManifest = archivePath.appendingPathComponent(manifestName)
-        let destManifest = output.appendingPathComponent(manifestName)
-        try fileManager.copyItem(at: sourceManifest, to: destManifest)
-
         // Copy all markdown files, preserving directory structure relative to data/
         let dataDir = archivePath.appendingPathComponent("data")
         guard let enumerator = fileManager.enumerator(at: dataDir, includingPropertiesForKeys: [.isRegularFileKey]) else {
@@ -334,8 +328,6 @@ struct DocumentationGenerator {
         print("   • \(totalCount - targetCount) for dependencies")
         print()
         print("📁 Output: \(output.path)")
-        print("📋 Manifest: \(target)-markdown-manifest.json")
-        print("📄 Markdown: documentation/\(targetLower)/")
     }
 
     // MARK: - Shell Execution
