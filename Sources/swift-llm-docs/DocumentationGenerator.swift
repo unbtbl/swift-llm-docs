@@ -236,11 +236,16 @@ struct DocumentationGenerator {
     // MARK: - DocC Convert
 
     private func runDoccConvert(docc: URL, target: String, output: URL) async throws {
-        let archivePath = output.appendingPathComponent("\(target).doccarchive")
+        // Generate doccarchive in temp directory
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent("swift-llm-docs-\(UUID().uuidString)")
+        let archivePath = tempDir.appendingPathComponent("\(target).doccarchive")
 
-        // Remove existing output
-        try? fileManager.removeItem(at: archivePath)
-        try fileManager.createDirectory(at: output, withIntermediateDirectories: true)
+        defer {
+            // Clean up temp directory
+            try? fileManager.removeItem(at: tempDir)
+        }
+
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
 
         _ = try await shell(
             docc.path, "convert",
@@ -254,22 +259,56 @@ struct DocumentationGenerator {
             timeout: 600 // 10 minutes - docc can be slow with many symbol graphs
         )
 
-        // Verify output
+        // Verify doccarchive was created with markdown
         let manifestPath = archivePath.appendingPathComponent("\(target)-markdown-manifest.json")
         guard fileManager.fileExists(atPath: manifestPath.path) else {
             throw GeneratorError.markdownNotGenerated
+        }
+
+        // Extract only markdown files to output directory
+        try extractMarkdownFiles(from: archivePath, to: output, target: target)
+    }
+
+    private func extractMarkdownFiles(from archivePath: URL, to output: URL, target: String) throws {
+        // Remove existing output and recreate
+        try? fileManager.removeItem(at: output)
+        try fileManager.createDirectory(at: output, withIntermediateDirectories: true)
+
+        // Copy manifest
+        let manifestName = "\(target)-markdown-manifest.json"
+        let sourceManifest = archivePath.appendingPathComponent(manifestName)
+        let destManifest = output.appendingPathComponent(manifestName)
+        try fileManager.copyItem(at: sourceManifest, to: destManifest)
+
+        // Copy all markdown files, preserving directory structure relative to data/
+        let dataDir = archivePath.appendingPathComponent("data")
+        guard let enumerator = fileManager.enumerator(at: dataDir, includingPropertiesForKeys: [.isRegularFileKey]) else {
+            return
+        }
+
+        while let sourceURL = enumerator.nextObject() as? URL {
+            guard sourceURL.pathExtension == "md" else { continue }
+
+            // Get path relative to data/ directory
+            let relativePath = sourceURL.path.replacingOccurrences(of: dataDir.path + "/", with: "")
+            let destURL = output.appendingPathComponent(relativePath)
+
+            // Create parent directories
+            try fileManager.createDirectory(at: destURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+            // Copy file
+            try fileManager.copyItem(at: sourceURL, to: destURL)
         }
     }
 
     // MARK: - Results
 
     private func reportResults(target: String, output: URL) throws {
-        let archivePath = output.appendingPathComponent("\(target).doccarchive")
         let targetLower = target.lowercased()
 
         // Count markdown files
         let enumerator = fileManager.enumerator(
-            at: archivePath,
+            at: output,
             includingPropertiesForKeys: nil
         )
 
@@ -294,10 +333,9 @@ struct DocumentationGenerator {
         print("   • \(targetCount) for \(target)")
         print("   • \(totalCount - targetCount) for dependencies")
         print()
-        print("📁 Output: \(archivePath.path)")
-        print()
+        print("📁 Output: \(output.path)")
         print("📋 Manifest: \(target)-markdown-manifest.json")
-        print("📄 Markdown: data/documentation/\(targetLower)/")
+        print("📄 Markdown: documentation/\(targetLower)/")
     }
 
     // MARK: - Shell Execution
