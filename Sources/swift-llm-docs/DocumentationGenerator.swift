@@ -490,7 +490,7 @@ struct DocumentationGenerator {
         return result
     }
 
-    /// Adds links to type names in backticks
+    /// Adds links to type names in backticks (only if not already inside a link)
     private func addTypeLinks(to markdown: String, currentModule: String, currentType: String, typeIndex: [String: TypeInfo]) -> String {
         var result = markdown
 
@@ -521,9 +521,28 @@ struct DocumentationGenerator {
                 linkPath = "../\(typeInfo.moduleName)/\(typeInfo.fileName)"
             }
 
-            // Use Swift Regex to match backtick-wrapped type names
-            let pattern = try! Regex("`\(regexEscape(typeName))`")
-            result = result.replacing(pattern, with: "[\(typeName)](\(linkPath))")
+            // Match backtick-wrapped type names NOT followed by ]( which would indicate already in a link
+            let searchTarget = "`\(typeName)`"
+            var searchStart = result.startIndex
+
+            while let range = result.range(of: searchTarget, range: searchStart..<result.endIndex) {
+                // Check if this is already part of a link (followed by "](" or preceded by "[")
+                let afterEnd = range.upperBound
+                let beforeStart = range.lowerBound
+
+                let isInsideLink = (afterEnd < result.endIndex && result[afterEnd...].hasPrefix("]("))
+                    || (beforeStart > result.startIndex && result[result.index(before: beforeStart)] == "[")
+
+                if !isInsideLink {
+                    let replacement = "[\(typeName)](\(linkPath))"
+                    result.replaceSubrange(range, with: replacement)
+                    // Move past the replacement
+                    searchStart = result.index(range.lowerBound, offsetBy: replacement.count)
+                } else {
+                    // Move past this match
+                    searchStart = range.upperBound
+                }
+            }
         }
 
         return result
