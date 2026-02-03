@@ -54,12 +54,11 @@ The tool generates a directory containing only markdown files:
 
 ```
 llm-docs/
-└── documentation/
-    └── mytarget/
-        ├── mytarget.md          # Module overview
-        ├── myclass.md           # Type documentation
-        └── myclass/
-            └── mymethod.md      # Member documentation
+└── mytarget/
+    ├── mytarget.md          # Module overview
+    ├── myclass.md           # Type documentation
+    └── myclass/
+        └── mymethod.md      # Member documentation
 ```
 
 Each markdown file includes a JSON metadata header:

@@ -274,17 +274,22 @@ struct DocumentationGenerator {
         try? fileManager.removeItem(at: output)
         try fileManager.createDirectory(at: output, withIntermediateDirectories: true)
 
-        // Copy all markdown files, preserving directory structure relative to data/
+        // Find the documentation directory (could be "documentation" or "privatedocumentation")
         let dataDir = archivePath.appendingPathComponent("data")
-        guard let enumerator = fileManager.enumerator(at: dataDir, includingPropertiesForKeys: [.isRegularFileKey]) else {
+        var docsDir = dataDir.appendingPathComponent("documentation")
+        if !fileManager.fileExists(atPath: docsDir.path) {
+            docsDir = dataDir.appendingPathComponent("privatedocumentation")
+        }
+
+        guard let enumerator = fileManager.enumerator(at: docsDir, includingPropertiesForKeys: [.isRegularFileKey]) else {
             return
         }
 
         while let sourceURL = enumerator.nextObject() as? URL {
             guard sourceURL.pathExtension == "md" else { continue }
 
-            // Get path relative to data/ directory
-            let relativePath = sourceURL.path.replacingOccurrences(of: dataDir.path + "/", with: "")
+            // Get path relative to documentation/ directory (skips the documentation/privatedocumentation layer)
+            let relativePath = sourceURL.path.replacingOccurrences(of: docsDir.path + "/", with: "")
             let destURL = output.appendingPathComponent(relativePath)
 
             // Create parent directories
@@ -298,8 +303,6 @@ struct DocumentationGenerator {
     // MARK: - Results
 
     private func reportResults(target: String, output: URL) throws {
-        let targetLower = target.lowercased()
-
         // Count markdown files
         let enumerator = fileManager.enumerator(
             at: output,
@@ -307,14 +310,9 @@ struct DocumentationGenerator {
         )
 
         var totalCount = 0
-        var targetCount = 0
-
         while let url = enumerator?.nextObject() as? URL {
             if url.pathExtension == "md" {
                 totalCount += 1
-                if url.path.lowercased().contains("/\(targetLower)/") {
-                    targetCount += 1
-                }
             }
         }
 
@@ -324,9 +322,6 @@ struct DocumentationGenerator {
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         print()
         print("📊 Generated \(totalCount) markdown files")
-        print("   • \(targetCount) for \(target)")
-        print("   • \(totalCount - targetCount) for dependencies")
-        print()
         print("📁 Output: \(output.path)")
     }
 
