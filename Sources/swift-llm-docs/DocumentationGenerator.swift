@@ -32,10 +32,14 @@ struct DocumentationGenerator {
         let packageURL = URL(fileURLWithPath: packagePath).standardizedFileURL
         let outputURL = URL(fileURLWithPath: outputPath).standardizedFileURL
 
-        // Resolve target name
+        print("📦 Package: \(packageURL.path)")
+
+        // Resolve target name (may take a while if resolving dependencies)
+        if target == nil {
+            print("🔍 Discovering targets...")
+        }
         let targetName = try await resolveTarget(in: packageURL)
 
-        print("📦 Package: \(packageURL.path)")
         print("🎯 Target: \(targetName)")
         print("📁 Output: \(outputURL.path)")
         print()
