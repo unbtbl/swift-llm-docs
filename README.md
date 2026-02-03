@@ -50,19 +50,17 @@ Subsequent runs use the cached binary.
 
 ## Output Format
 
-The tool generates a `.doccarchive` containing:
+The tool generates a directory containing only markdown files:
 
 ```
-MyTarget.doccarchive/
+llm-docs/
 ├── MyTarget-markdown-manifest.json  # Index of all markdown files
-├── data/
-│   └── documentation/
-│       └── mytarget/
-│           ├── mytarget.md          # Module overview
-│           ├── myclass.md           # Type documentation
-│           └── myclass/
-│               └── mymethod.md      # Member documentation
-└── ...
+└── documentation/
+    └── mytarget/
+        ├── mytarget.md              # Module overview
+        ├── myclass.md               # Type documentation
+        └── myclass/
+            └── mymethod.md          # Member documentation
 ```
 
 Each markdown file includes a JSON metadata header:
