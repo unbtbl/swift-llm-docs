@@ -274,22 +274,32 @@ struct DocumentationGenerator {
         try? fileManager.removeItem(at: output)
         try fileManager.createDirectory(at: output, withIntermediateDirectories: true)
 
-        // Find the documentation directory (could be "documentation" or "privatedocumentation")
+        // Find the target directory inside documentation/privatedocumentation
+        // Structure is: data/(private)documentation/(private)targetname/
         let dataDir = archivePath.appendingPathComponent("data")
-        var docsDir = dataDir.appendingPathComponent("documentation")
-        if !fileManager.fileExists(atPath: docsDir.path) {
-            docsDir = dataDir.appendingPathComponent("privatedocumentation")
+        let targetLower = target.lowercased()
+
+        // Try all possible paths
+        let possiblePaths = [
+            dataDir.appendingPathComponent("documentation/\(targetLower)"),
+            dataDir.appendingPathComponent("privatedocumentation/\(targetLower)"),
+            dataDir.appendingPathComponent("documentation/private\(targetLower)"),
+            dataDir.appendingPathComponent("privatedocumentation/private\(targetLower)")
+        ]
+
+        guard let targetDir = possiblePaths.first(where: { fileManager.fileExists(atPath: $0.path) }) else {
+            throw GeneratorError.markdownNotGenerated
         }
 
-        guard let enumerator = fileManager.enumerator(at: docsDir, includingPropertiesForKeys: [.isRegularFileKey]) else {
+        guard let enumerator = fileManager.enumerator(at: targetDir, includingPropertiesForKeys: [.isRegularFileKey]) else {
             return
         }
 
         while let sourceURL = enumerator.nextObject() as? URL {
             guard sourceURL.pathExtension == "md" else { continue }
 
-            // Get path relative to documentation/ directory (skips the documentation/privatedocumentation layer)
-            let relativePath = sourceURL.path.replacingOccurrences(of: docsDir.path + "/", with: "")
+            // Get path relative to target directory
+            let relativePath = sourceURL.path.replacingOccurrences(of: targetDir.path + "/", with: "")
             let destURL = output.appendingPathComponent(relativePath)
 
             // Create parent directories
