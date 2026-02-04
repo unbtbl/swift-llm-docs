@@ -56,7 +56,11 @@ struct DocumentationGenerator {
         print("📝 Running DocC convert...")
         try await runDoccConvert(docc: doccURL, target: targetName, output: outputURL)
 
-        // Step 4: Report results
+        // Step 4: Copy articles from .docc catalogs
+        print("📚 Copying articles from documentation catalogs...")
+        try copyArticlesFromDoccCatalogs(packageURL: packageURL, output: outputURL)
+
+        // Step 5: Report results
         try reportResults(output: outputURL)
     }
 
@@ -566,6 +570,186 @@ struct DocumentationGenerator {
             }
         }
         return lines.joined(separator: "\n")
+    }
+
+    // MARK: - Article Extraction
+
+    /// Copies articles from .docc catalogs in the package's dependencies
+    private func copyArticlesFromDoccCatalogs(packageURL: URL, output: URL) throws {
+        let checkoutsPath = packageURL.appendingPathComponent(".build/checkouts")
+        guard fileManager.fileExists(atPath: checkoutsPath.path) else {
+            print("   No checkouts directory found, skipping articles")
+            return
+        }
+
+        // Find all .docc directories
+        let enumerator = fileManager.enumerator(
+            at: checkoutsPath,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+
+        var doccCatalogs: [URL] = []
+        while let url = enumerator?.nextObject() as? URL {
+            if url.pathExtension == "docc" {
+                doccCatalogs.append(url)
+            }
+        }
+
+        print("   Found \(doccCatalogs.count) documentation catalogs")
+
+        var totalArticles = 0
+
+        for catalogURL in doccCatalogs {
+            // Extract module name from path: .../Sources/ModuleName/Something.docc
+            let pathComponents = catalogURL.pathComponents
+            guard let sourcesIndex = pathComponents.firstIndex(of: "Sources"),
+                  sourcesIndex + 1 < pathComponents.count else {
+                continue
+            }
+            let moduleName = pathComponents[sourcesIndex + 1]
+
+            // Find the corresponding module directory in output
+            let moduleDir = output.appendingPathComponent(moduleName)
+            guard fileManager.fileExists(atPath: moduleDir.path) else {
+                // Module wasn't generated (might be filtered out), skip
+                continue
+            }
+
+            // Create Articles directory
+            let articlesDir = moduleDir.appendingPathComponent("Articles")
+
+            // Find the module landing page - it starts with # ``ModuleName``
+            if let landingPageURL = findModuleLandingPage(in: catalogURL, moduleName: moduleName),
+               let landingContent = try? String(contentsOf: landingPageURL, encoding: .utf8) {
+                let processedOverview = processArticle(landingContent, moduleName: moduleName)
+                let overviewURL = output.appendingPathComponent("\(moduleName).md")
+                try processedOverview.write(to: overviewURL, atomically: true, encoding: .utf8)
+            }
+
+            // Copy all markdown files from the catalog (except index.md which is module overview)
+            let articleCount = try copyArticles(from: catalogURL, to: articlesDir, moduleName: moduleName)
+            if articleCount > 0 {
+                totalArticles += articleCount
+            }
+        }
+
+        print("   ✓ Copied \(totalArticles) articles")
+    }
+
+    /// Finds the module landing page in a .docc catalog
+    /// The landing page is identified by starting with `# ``ModuleName`` `
+    private func findModuleLandingPage(in catalogURL: URL, moduleName: String) -> URL? {
+        let expectedTitle = "# ``\(moduleName)``"
+
+        // Check direct children first (most common location)
+        let directContents = try? fileManager.contentsOfDirectory(at: catalogURL, includingPropertiesForKeys: nil)
+        for url in directContents ?? [] {
+            guard url.pathExtension == "md" else { continue }
+            if let content = try? String(contentsOf: url, encoding: .utf8),
+               content.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(expectedTitle) {
+                return url
+            }
+        }
+
+        return nil
+    }
+
+    /// Copies article markdown files from a docc catalog to the output directory
+    private func copyArticles(from catalogURL: URL, to articlesDir: URL, moduleName: String) throws -> Int {
+        var count = 0
+
+        // Find the landing page so we can skip it
+        let landingPageURL = findModuleLandingPage(in: catalogURL, moduleName: moduleName)
+
+        let enumerator = fileManager.enumerator(
+            at: catalogURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+
+        while let url = enumerator?.nextObject() as? URL {
+            guard url.pathExtension == "md" else { continue }
+
+            // Skip the module landing page - it's used for the overview
+            if url == landingPageURL {
+                continue
+            }
+
+            // Create articles directory if needed
+            if !fileManager.fileExists(atPath: articlesDir.path) {
+                try fileManager.createDirectory(at: articlesDir, withIntermediateDirectories: true)
+            }
+
+            // Determine relative path within the catalog for nested articles
+            let relativePath = url.path.replacingOccurrences(of: catalogURL.path + "/", with: "")
+            let destURL: URL
+
+            if relativePath.contains("/") {
+                // Nested article - preserve subdirectory structure
+                let subdir = (relativePath as NSString).deletingLastPathComponent
+                let subdirURL = articlesDir.appendingPathComponent(subdir)
+                try fileManager.createDirectory(at: subdirURL, withIntermediateDirectories: true)
+                destURL = articlesDir.appendingPathComponent(relativePath)
+            } else {
+                destURL = articlesDir.appendingPathComponent(url.lastPathComponent)
+            }
+
+            // Read, process, and write the article
+            if let content = try? String(contentsOf: url, encoding: .utf8) {
+                // Strip any DocC-specific directives that won't render in plain markdown
+                let processedContent = processArticle(content, moduleName: moduleName)
+                try processedContent.write(to: destURL, atomically: true, encoding: .utf8)
+                count += 1
+            }
+        }
+
+        return count
+    }
+
+    /// Process article content to clean up DocC-specific syntax
+    private func processArticle(_ content: String, moduleName: String) -> String {
+        var result = content
+
+        // Remove @Metadata blocks (simple approach - find @Metadata and remove until closing brace)
+        while let metaStart = result.range(of: "@Metadata") {
+            if let braceStart = result.range(of: "{", range: metaStart.upperBound..<result.endIndex),
+               let braceEnd = result.range(of: "}", range: braceStart.upperBound..<result.endIndex) {
+                result.removeSubrange(metaStart.lowerBound...braceEnd.upperBound)
+            } else {
+                break
+            }
+        }
+
+        // Remove @Options blocks
+        while let optStart = result.range(of: "@Options") {
+            if let braceStart = result.range(of: "{", range: optStart.upperBound..<result.endIndex),
+               let braceEnd = result.range(of: "}", range: braceStart.upperBound..<result.endIndex) {
+                result.removeSubrange(optStart.lowerBound...braceEnd.upperBound)
+            } else {
+                break
+            }
+        }
+
+        // Convert ``Symbol`` to `Symbol` (DocC double backticks to standard markdown)
+        // But preserve triple backticks for code blocks - replace them temporarily
+        result = result.replacingOccurrences(of: "```", with: "<<<CODE_FENCE>>>")
+        result = result.replacingOccurrences(of: "``", with: "`")
+        result = result.replacingOccurrences(of: "<<<CODE_FENCE>>>", with: "```")
+
+        // Convert <doc:Article> links to relative markdown links
+        let docLinkPattern = /<doc:([^>]+)>/
+        var replacements: [(Range<String.Index>, String)] = []
+        for match in result.matches(of: docLinkPattern) {
+            let target = String(match.output.1)
+            let replacement = "[\(target)](\(target).md)"
+            replacements.append((match.range, replacement))
+        }
+        for (range, replacement) in replacements.reversed() {
+            result.replaceSubrange(range, with: replacement)
+        }
+
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Results
