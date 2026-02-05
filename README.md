@@ -39,7 +39,7 @@ swift-llm-docs --package . --target MyTarget --docc-path /path/to/docc
 | `-t, --target` | Target to generate documentation for |
 | `-o, --output` | Output directory (default: `./llm-docs`) |
 | `--docc-path` | Path to a custom docc binary (skips building DocC) |
-| `--include-dependencies` | Include documentation for dependencies |
+| `--no-include-dependencies` | Exclude documentation for dependencies (included by default) |
 | `--verbose` | Verbose output |
 
 ## First Run

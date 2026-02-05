@@ -29,8 +29,8 @@ struct SwiftLLMDocs: AsyncParsableCommand {
     @Option(name: .long, help: "Path to a custom docc binary (skips building DocC)")
     var doccPath: String?
 
-    @Flag(name: .long, help: "Include documentation for dependencies")
-    var includeDependencies: Bool = false
+    @Flag(name: .long, inversion: .prefixedNo, help: "Include documentation for dependencies")
+    var includeDependencies: Bool = true
 
     @Flag(name: .long, help: "Verbose output")
     var verbose: Bool = false
