@@ -43,8 +43,8 @@ struct SwiftLLMDocs: AsyncParsableCommand {
     var useXcrun: Bool = false
     #endif
 
-    @Flag(name: .long, inversion: .prefixedNo, help: "Include documentation for dependencies (default: false)")
-    var includeDependencies: Bool = false
+    @Flag(name: .long, inversion: .prefixedNo, help: "Include documentation for dependencies")
+    var includeDependencies: Bool = true
 
     @Flag(name: .long, help: "Verbose output")
     var verbose: Bool = false
