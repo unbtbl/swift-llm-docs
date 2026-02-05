@@ -1,10 +1,35 @@
 import Foundation
 
+/// Configuration for how to invoke Swift commands.
+struct SwiftInvocation {
+    /// Custom path to Swift executable. When set, `useXcrun` is ignored.
+    let customSwiftPath: String?
+
+    #if os(macOS)
+    /// Use `xcrun swift` instead of `swift`. Ignored when `customSwiftPath` is set.
+    /// Only available on macOS.
+    let useXcrun: Bool
+    #endif
+
+    var commandPrefix: [String] {
+        if let customPath = customSwiftPath {
+            return [customPath]
+        }
+        #if os(macOS)
+        if useXcrun {
+            return ["xcrun", "swift"]
+        }
+        #endif
+        return ["swift"]
+    }
+}
+
 struct DocumentationGenerator {
     let packagePath: String
     let target: String?
     let outputPath: String
     let customDoccPath: String?
+    let swiftInvocation: SwiftInvocation
     let includeDependencies: Bool
     let verbose: Bool
 
@@ -26,6 +51,14 @@ struct DocumentationGenerator {
 
     private var symbolGraphsPath: URL {
         cacheDirectory.appendingPathComponent("symbol-graphs", isDirectory: true)
+    }
+
+    private func swiftCommand(_ args: String...) -> [String] {
+        swiftInvocation.commandPrefix + args
+    }
+
+    private func swiftCommand(_ args: [String]) -> [String] {
+        swiftInvocation.commandPrefix + args
     }
 
     func run() async throws {
@@ -79,7 +112,7 @@ struct DocumentationGenerator {
 
         print("   Running swift package dump-package...")
         let result = try await shell(
-            "xcrun", "swift", "package", "dump-package",
+            swiftCommand("package", "dump-package"),
             workingDirectory: packageURL,
             timeout: 300,
             captureOutput: true
@@ -150,7 +183,7 @@ struct DocumentationGenerator {
 
         print("   Compiling DocC...")
         _ = try await shell(
-            "xcrun", "swift", "build", "-c", "release", "--product", "docc",
+            swiftCommand("build", "-c", "release", "--product", "docc"),
             workingDirectory: doccRepoPath,
             timeout: 600
         )
@@ -172,15 +205,17 @@ struct DocumentationGenerator {
 
         // Clean the package build to force symbol graph emission for all modules
         print("   Running swift package clean...")
-        _ = try await shell("xcrun", "swift", "package", "clean", workingDirectory: packageURL, timeout: 60)
+        _ = try await shell(swiftCommand("package", "clean"), workingDirectory: packageURL, timeout: 60)
 
         // Build with symbol graph emission
         print("   Building package with symbol graph emission (this may take a while)...")
         _ = try await shell(
-            "xcrun", "swift", "build",
-            "-Xswiftc", "-emit-symbol-graph",
-            "-Xswiftc", "-emit-symbol-graph-dir",
-            "-Xswiftc", symbolGraphsPath.path,
+            swiftCommand([
+                "build",
+                "-Xswiftc", "-emit-symbol-graph",
+                "-Xswiftc", "-emit-symbol-graph-dir",
+                "-Xswiftc", symbolGraphsPath.path
+            ]),
             workingDirectory: packageURL,
             timeout: 900
         )

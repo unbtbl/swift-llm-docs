@@ -29,6 +29,14 @@ struct SwiftLLMDocs: AsyncParsableCommand {
     @Option(name: .long, help: "Path to a custom docc binary (skips building DocC)")
     var doccPath: String?
 
+    @Option(name: .long, help: "Path to a custom Swift executable")
+    var swiftPath: String?
+
+    #if os(macOS)
+    @Flag(name: .long, help: "Use xcrun to invoke Swift (ignored when --swift-path is set)")
+    var useXcrun: Bool = false
+    #endif
+
     @Flag(name: .long, inversion: .prefixedNo, help: "Include documentation for dependencies")
     var includeDependencies: Bool = true
 
@@ -36,11 +44,23 @@ struct SwiftLLMDocs: AsyncParsableCommand {
     var verbose: Bool = false
 
     func run() async throws {
+        #if os(macOS)
+        let swiftInvocation = SwiftInvocation(
+            customSwiftPath: swiftPath,
+            useXcrun: useXcrun
+        )
+        #else
+        let swiftInvocation = SwiftInvocation(
+            customSwiftPath: swiftPath
+        )
+        #endif
+
         let generator = DocumentationGenerator(
             packagePath: package,
             target: target,
             outputPath: output,
             customDoccPath: doccPath,
+            swiftInvocation: swiftInvocation,
             includeDependencies: includeDependencies,
             verbose: verbose
         )
