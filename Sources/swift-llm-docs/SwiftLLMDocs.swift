@@ -32,13 +32,19 @@ struct SwiftLLMDocs: AsyncParsableCommand {
     @Option(name: .long, help: "Path to a custom Swift executable")
     var swiftPath: String?
 
+    @Option(name: .long, help: "Path to Xcode project (.xcodeproj)")
+    var xcodeproj: String?
+
+    @Option(name: .long, help: "Xcode scheme to build documentation for")
+    var scheme: String?
+
     #if os(macOS)
     @Flag(name: .long, help: "Use xcrun to invoke Swift (ignored when --swift-path is set)")
     var useXcrun: Bool = false
     #endif
 
-    @Flag(name: .long, inversion: .prefixedNo, help: "Include documentation for dependencies")
-    var includeDependencies: Bool = true
+    @Flag(name: .long, inversion: .prefixedNo, help: "Include documentation for dependencies (default: false)")
+    var includeDependencies: Bool = false
 
     @Flag(name: .long, help: "Verbose output")
     var verbose: Bool = false
@@ -60,6 +66,8 @@ struct SwiftLLMDocs: AsyncParsableCommand {
             target: target,
             outputPath: output,
             customDoccPath: doccPath,
+            xcodeProjectPath: xcodeproj,
+            scheme: scheme,
             swiftInvocation: swiftInvocation,
             includeDependencies: includeDependencies,
             verbose: verbose

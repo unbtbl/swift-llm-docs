@@ -24,11 +24,18 @@ struct SwiftInvocation {
     }
 }
 
+enum InputType {
+    case swiftPackage(URL)
+    case xcodeProject(URL)
+}
+
 struct DocumentationGenerator {
     let packagePath: String
     let target: String?
     let outputPath: String
     let customDoccPath: String?
+    let xcodeProjectPath: String?
+    let scheme: String?
     let swiftInvocation: SwiftInvocation
     let includeDependencies: Bool
     let verbose: Bool
@@ -53,6 +60,21 @@ struct DocumentationGenerator {
         cacheDirectory.appendingPathComponent("symbol-graphs", isDirectory: true)
     }
 
+    private var xcodeDerivedDataPath: URL {
+        cacheDirectory.appendingPathComponent("xcode-derived-data", isDirectory: true)
+    }
+
+    private func detectInputType() throws -> InputType {
+        if let xcodePath = xcodeProjectPath {
+            let url = URL(fileURLWithPath: xcodePath).standardizedFileURL
+            guard url.pathExtension == "xcodeproj" else {
+                throw GeneratorError.notAnXcodeProject(xcodePath)
+            }
+            return .xcodeProject(url)
+        }
+        return .swiftPackage(URL(fileURLWithPath: packagePath).standardizedFileURL)
+    }
+
     private func swiftCommand(_ args: String...) -> [String] {
         swiftInvocation.commandPrefix + args
     }
@@ -62,9 +84,19 @@ struct DocumentationGenerator {
     }
 
     func run() async throws {
-        let packageURL = URL(fileURLWithPath: packagePath).standardizedFileURL
+        let inputType = try detectInputType()
         let outputURL = URL(fileURLWithPath: outputPath).standardizedFileURL
 
+        switch inputType {
+        case .swiftPackage(let packageURL):
+            try await runSwiftPackageFlow(packageURL: packageURL, outputURL: outputURL)
+
+        case .xcodeProject(let projectURL):
+            try await runXcodeProjectFlow(projectURL: projectURL, outputURL: outputURL)
+        }
+    }
+
+    private func runSwiftPackageFlow(packageURL: URL, outputURL: URL) async throws {
         print("📦 Package: \(packageURL.path)")
 
         // Resolve target name (may take a while if resolving dependencies)
@@ -97,6 +129,39 @@ struct DocumentationGenerator {
         try reportResults(output: outputURL)
     }
 
+    private func runXcodeProjectFlow(projectURL: URL, outputURL: URL) async throws {
+        print("📦 Xcode Project: \(projectURL.path)")
+
+        // Resolve scheme
+        if scheme == nil {
+            print("🔍 Discovering schemes...")
+        }
+        let schemeName = try await resolveXcodeScheme(in: projectURL)
+
+        print("🎯 Scheme: \(schemeName)")
+        print("📁 Output: \(outputURL.path)")
+        print()
+
+        // Step 1: Ensure we have a working docc binary
+        print("🔧 Checking DocC...")
+        let doccURL = try await ensureDocC()
+
+        // Step 2: Generate symbol graphs via xcodebuild
+        print("📊 Building documentation with xcodebuild...")
+        try await generateSymbolGraphsViaXcodebuild(project: projectURL, scheme: schemeName)
+
+        // Step 3: Run docc convert
+        print("📝 Running DocC convert...")
+        try await runDoccConvert(docc: doccURL, target: schemeName, output: outputURL)
+
+        // Step 4: Copy articles from .docc catalogs (search project directory)
+        print("📚 Copying articles from documentation catalogs...")
+        try copyArticlesFromDoccCatalogs(packageURL: projectURL.deletingLastPathComponent(), output: outputURL)
+
+        // Step 5: Report results
+        try reportResults(output: outputURL)
+    }
+
     // MARK: - Target Resolution
 
     private func resolveTarget(in packageURL: URL) async throws -> String {
@@ -114,7 +179,6 @@ struct DocumentationGenerator {
         let result = try await shell(
             swiftCommand("package", "dump-package"),
             workingDirectory: packageURL,
-            timeout: 300,
             captureOutput: true
         )
 
@@ -129,6 +193,124 @@ struct DocumentationGenerator {
         }
 
         return firstTarget.name
+    }
+
+    // MARK: - Xcode Scheme Resolution
+
+    private func resolveXcodeScheme(in projectURL: URL) async throws -> String {
+        if let scheme = scheme {
+            return scheme
+        }
+
+        // Run: xcodebuild -list -project <path> -json
+        print("   Running xcodebuild -list...")
+        let result = try await shell(
+            "xcodebuild", "-list", "-project", projectURL.path, "-json",
+            captureOutput: true
+        )
+
+        // Parse JSON to get schemes
+        guard let data = result.output.data(using: .utf8),
+              let json = try? JSONDecoder().decode(XcodeBuildList.self, from: data),
+              let firstScheme = json.project.schemes.first else {
+            throw GeneratorError.noSchemesFound
+        }
+
+        return firstScheme
+    }
+
+    // MARK: - Xcode Symbol Graph Generation
+
+    private func generateSymbolGraphsViaXcodebuild(project: URL, scheme: String) async throws {
+        // Clean previous derived data and symbol graphs
+        print("   Cleaning previous builds...")
+        try? fileManager.removeItem(at: xcodeDerivedDataPath)
+        try? fileManager.removeItem(at: symbolGraphsPath)
+        try fileManager.createDirectory(at: symbolGraphsPath, withIntermediateDirectories: true)
+
+        // Run xcodebuild docbuild
+        print("   Running xcodebuild docbuild (this may take a while)...")
+        if verbose {
+            print("   $ xcodebuild docbuild -project \(project.path) -scheme \(scheme) -derivedDataPath \(xcodeDerivedDataPath.path)")
+        }
+
+        _ = try await shell(
+            "xcodebuild", "docbuild",
+            "-project", project.path,
+            "-scheme", scheme,
+            "-derivedDataPath", xcodeDerivedDataPath.path
+        )
+
+        // Collect symbol graphs from derived data
+        print("   Collecting symbol graphs...")
+        let totalCollected = try collectSymbolGraphs(from: xcodeDerivedDataPath, scheme: scheme)
+        print("   Collected \(totalCollected) symbol graphs total")
+
+        // Filter symbol graphs if not including dependencies
+        if !includeDependencies {
+            print("   Filtering to project-related modules...")
+            try filterSymbolGraphsForScheme(scheme)
+        }
+
+        // Check what we got
+        let contents = try? fileManager.contentsOfDirectory(at: symbolGraphsPath, includingPropertiesForKeys: nil)
+        let allGraphs = contents?.filter { $0.pathExtension == "json" } ?? []
+
+        print("   Found \(allGraphs.count) symbol graphs for documentation")
+
+        guard !allGraphs.isEmpty else {
+            throw GeneratorError.symbolGraphNotGenerated(scheme)
+        }
+    }
+
+    private func collectSymbolGraphs(from derivedDataPath: URL, scheme: String) throws -> Int {
+        let buildDir = derivedDataPath.appendingPathComponent("Build/Intermediates.noindex")
+
+        guard let enumerator = fileManager.enumerator(at: buildDir, includingPropertiesForKeys: nil) else {
+            return 0
+        }
+
+        var count = 0
+        while let fileURL = enumerator.nextObject() as? URL {
+            // Look for symbol graph JSON files
+            if fileURL.pathExtension == "json" && fileURL.path.contains("symbol-graph") {
+                let destURL = symbolGraphsPath.appendingPathComponent(fileURL.lastPathComponent)
+                // Skip if already exists (avoid duplicates)
+                if !fileManager.fileExists(atPath: destURL.path) {
+                    try? fileManager.copyItem(at: fileURL, to: destURL)
+                    count += 1
+                }
+            }
+        }
+        return count
+    }
+
+    /// Filters symbol graphs to only include modules related to the scheme.
+    /// A module is considered related if its name contains the scheme name (case-insensitive).
+    private func filterSymbolGraphsForScheme(_ scheme: String) throws {
+        let contents = try fileManager.contentsOfDirectory(at: symbolGraphsPath, includingPropertiesForKeys: nil)
+        let schemeLower = scheme.lowercased()
+
+        var removed = 0
+        for fileURL in contents where fileURL.pathExtension == "json" {
+            // Get the module name from the file (e.g., "ModuleName.symbols.json" or "ModuleName@Extension.symbols.json")
+            let fileName = fileURL.deletingPathExtension().lastPathComponent // Remove .json
+            let baseName = fileName.replacingOccurrences(of: ".symbols", with: "") // Remove .symbols
+            let moduleName = baseName.components(separatedBy: "@").first ?? baseName // Get module before @
+
+            // Keep if the module name contains the scheme name (case-insensitive)
+            let moduleNameLower = moduleName.lowercased()
+            let isRelated = moduleNameLower.contains(schemeLower)
+
+            if !isRelated {
+                try? fileManager.removeItem(at: fileURL)
+                removed += 1
+            }
+        }
+
+        if removed > 0 {
+            print("   Removed \(removed) dependency symbol graphs")
+        }
     }
 
     // MARK: - DocC Management
@@ -184,8 +366,7 @@ struct DocumentationGenerator {
         print("   Compiling DocC...")
         _ = try await shell(
             swiftCommand("build", "-c", "release", "--product", "docc"),
-            workingDirectory: doccRepoPath,
-            timeout: 600
+            workingDirectory: doccRepoPath
         )
 
         guard fileManager.isExecutableFile(atPath: doccBinaryPath.path) else {
@@ -205,7 +386,7 @@ struct DocumentationGenerator {
 
         // Clean the package build to force symbol graph emission for all modules
         print("   Running swift package clean...")
-        _ = try await shell(swiftCommand("package", "clean"), workingDirectory: packageURL, timeout: 60)
+        _ = try await shell(swiftCommand("package", "clean"), workingDirectory: packageURL)
 
         // Build with symbol graph emission
         print("   Building package with symbol graph emission (this may take a while)...")
@@ -216,8 +397,7 @@ struct DocumentationGenerator {
                 "-Xswiftc", "-emit-symbol-graph-dir",
                 "-Xswiftc", symbolGraphsPath.path
             ]),
-            workingDirectory: packageURL,
-            timeout: 900
+            workingDirectory: packageURL
         )
 
         // Check what we got
@@ -269,8 +449,7 @@ struct DocumentationGenerator {
             "--fallback-bundle-identifier", "com.dependencies",
             "--enable-experimental-markdown-output",
             "--enable-experimental-markdown-output-manifest",
-            "--no-transform-for-static-hosting",
-            timeout: 600
+            "--no-transform-for-static-hosting"
         )
 
         print("   Checking for doccarchive...")
@@ -946,16 +1125,14 @@ struct DocumentationGenerator {
     private func shell(
         _ args: String...,
         workingDirectory: URL? = nil,
-        timeout: TimeInterval = 120,
         captureOutput: Bool = false
     ) async throws -> ShellResult {
-        try await shell(args, workingDirectory: workingDirectory, timeout: timeout, captureOutput: captureOutput)
+        try await shell(args, workingDirectory: workingDirectory, captureOutput: captureOutput)
     }
 
     private func shell(
         _ args: [String],
         workingDirectory: URL? = nil,
-        timeout: TimeInterval = 120,
         captureOutput: Bool = false
     ) async throws -> ShellResult {
         let process = Process()
@@ -985,16 +1162,7 @@ struct DocumentationGenerator {
         }
 
         try process.run()
-
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning && Date() < deadline {
-            try await Task.sleep(for: .milliseconds(100))
-        }
-
-        if process.isRunning {
-            process.terminate()
-            throw GeneratorError.commandTimeout(args.joined(separator: " "))
-        }
+        process.waitUntilExit()
 
         var output = ""
         var error = ""
@@ -1032,6 +1200,14 @@ struct PackageDescription: Decodable {
     }
 }
 
+struct XcodeBuildList: Decodable {
+    let project: XcodeProjectInfo
+
+    struct XcodeProjectInfo: Decodable {
+        let schemes: [String]
+    }
+}
+
 struct DocCDocument: Decodable {
     let metadata: DocCMetadata?
     let topicSections: [DocCTopicSection]?
@@ -1066,12 +1242,13 @@ enum GeneratorError: LocalizedError {
     case notASwiftPackage(String)
     case couldNotParsePackage
     case noTargetsFound
+    case notAnXcodeProject(String)
+    case noSchemesFound
     case doccNotExecutable(String)
     case doccMissingMarkdownSupport
     case doccBuildFailed
     case symbolGraphNotGenerated(String)
     case markdownNotGenerated
-    case commandTimeout(String)
 
     var errorDescription: String? {
         switch self {
@@ -1081,6 +1258,10 @@ enum GeneratorError: LocalizedError {
             return "Could not parse Package.swift"
         case .noTargetsFound:
             return "No targets found in package. Use --target to specify one."
+        case .notAnXcodeProject(let path):
+            return "Not an Xcode project: \(path) (expected .xcodeproj)"
+        case .noSchemesFound:
+            return "No schemes found in Xcode project. Use --scheme to specify one."
         case .doccNotExecutable(let path):
             return "DocC not executable at: \(path)"
         case .doccMissingMarkdownSupport:
@@ -1091,8 +1272,6 @@ enum GeneratorError: LocalizedError {
             return "Symbol graph not generated for target: \(target)"
         case .markdownNotGenerated:
             return "Markdown output was not generated"
-        case .commandTimeout(let command):
-            return "Command timed out: \(command)"
         }
     }
 }
