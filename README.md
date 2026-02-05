@@ -82,9 +82,3 @@ Each markdown file includes a JSON metadata header:
 
 Documentation content here...
 ```
-
-## Requirements
-
-- macOS 26+
-- Swift 6.2+ toolchain
-- Xcode Command Line Tools

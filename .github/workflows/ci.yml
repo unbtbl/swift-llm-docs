@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swift build
+      - name: Generate documentation
+        run: swift run swift-llm-docs --package . --verbose
+
+  build-linux:
+    runs-on: ubuntu-latest
+    container:
+      image: swift:6.2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swift build
+      - name: Generate documentation
+        run: swift run swift-llm-docs --package . --verbose
