@@ -4,6 +4,10 @@ Generate LLM-friendly Markdown documentation from Swift packages.
 
 This tool uses DocC's experimental markdown output feature (from release/6.3) to generate documentation optimized for consumption by Large Language Models.
 
+## Example Output
+
+See the [llm-docs](./llm-docs) directory for example generated documentation, including [ArgumentParser](./llm-docs/ArgumentParser).
+
 ## Installation
 
 ```bash
