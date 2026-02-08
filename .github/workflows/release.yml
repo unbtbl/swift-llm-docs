@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: macos-26
+    outputs:
+      sha256: ${{ steps.sha.outputs.sha256 }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build swift-llm-docs
+        run: swift build -c release
+
+      - name: Build DocC from release/6.3
+        run: |
+          git clone --branch release/6.3 --depth 1 https://github.com/swiftlang/swift-docc.git /tmp/swift-docc
+          cd /tmp/swift-docc
+          swift build -c release --product docc
+        timeout-minutes: 30
+
+      - name: Bundle release tarball
+        run: |
+          mkdir -p staging/bin staging/licenses/swift-llm-docs staging/licenses/swift-docc
+
+          # Binaries
+          cp .build/release/swift-llm-docs staging/bin/
+          cp /tmp/swift-docc/.build/release/docc staging/bin/
+
+          # Licenses
+          cp LICENSE staging/licenses/swift-llm-docs/LICENSE
+          cp /tmp/swift-docc/LICENSE.txt staging/licenses/swift-docc/LICENSE.txt
+
+          # NOTICE.txt is required by Apache 2.0 for swift-docc
+          if [ -f /tmp/swift-docc/NOTICE.txt ]; then
+            cp /tmp/swift-docc/NOTICE.txt staging/licenses/swift-docc/NOTICE.txt
+          fi
+
+          cd staging
+          tar -czf ../swift-llm-docs-macos-arm64.tar.gz .
+
+      - name: Compute SHA256
+        id: sha
+        run: echo "sha256=$(shasum -a 256 swift-llm-docs-macos-arm64.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: swift-llm-docs-macos-arm64.tar.gz
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-homebrew:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: unbtbl/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update formula
+        run: |
+          VERSION="${{ needs.build.outputs.version }}"
+          SHA256="${{ needs.build.outputs.sha256 }}"
+          TAG="v${VERSION}"
+
+          cat > Formula/swift-llm-docs.rb << 'FORMULA'
+          class SwiftLlmDocs < Formula
+            desc "Generate LLM-friendly Markdown documentation from Swift package dependencies"
+            homepage "https://github.com/unbtbl/swift-llm-docs"
+            version "VERSION_PLACEHOLDER"
+            license "Apache-2.0"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/unbtbl/swift-llm-docs/releases/download/TAG_PLACEHOLDER/swift-llm-docs-macos-arm64.tar.gz"
+                sha256 "SHA256_PLACEHOLDER"
+              end
+            end
+
+            def install
+              bin.install "bin/swift-llm-docs"
+              bin.install "bin/docc" => "swift-llm-docs-docc"
+              (share/"swift-llm-docs/licenses/swift-llm-docs").install "licenses/swift-llm-docs/LICENSE"
+              (share/"swift-llm-docs/licenses/swift-docc").install "licenses/swift-docc/LICENSE.txt"
+              if File.exist?("licenses/swift-docc/NOTICE.txt")
+                (share/"swift-llm-docs/licenses/swift-docc").install "licenses/swift-docc/NOTICE.txt"
+              end
+            end
+
+            test do
+              system bin/"swift-llm-docs", "--help"
+            end
+          end
+          FORMULA
+
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" Formula/swift-llm-docs.rb
+          sed -i "s/TAG_PLACEHOLDER/${TAG}/g" Formula/swift-llm-docs.rb
+          sed -i "s/SHA256_PLACEHOLDER/${SHA256}/g" Formula/swift-llm-docs.rb
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' Formula/swift-llm-docs.rb
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/swift-llm-docs.rb
+          git commit -m "Update swift-llm-docs to ${{ needs.build.outputs.version }}"
+          git push

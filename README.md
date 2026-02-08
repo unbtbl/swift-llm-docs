@@ -81,15 +81,26 @@ See the full example output in [llm-docs/ArgumentParser](./llm-docs/ArgumentPars
 ## Quick Start
 
 ```bash
-# Build the tool
-git clone https://github.com/unbtbl/swift-llm-docs.git
-cd swift-llm-docs && swift build -c release
+# Install via Homebrew
+brew tap unbtbl/tap
+brew install swift-llm-docs
 
 # Generate dependency docs for your Swift package
-.build/release/swift-llm-docs --package /path/to/YourPackage --target YourTarget
+swift-llm-docs --package /path/to/YourPackage --target YourTarget
 
 # Output is in ./llm-docs/ — your coding agent will pick it up automatically
 ```
+
+<details>
+<summary>Or build from source</summary>
+
+```bash
+git clone https://github.com/unbtbl/swift-llm-docs.git
+cd swift-llm-docs && swift build -c release
+# Binary is at .build/release/swift-llm-docs
+```
+
+</details>
 
 ## Features
 

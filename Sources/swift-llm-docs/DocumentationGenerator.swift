@@ -331,6 +331,20 @@ struct DocumentationGenerator {
             return url
         }
 
+        // Check for bundled docc (e.g. installed via Homebrew as swift-llm-docs-docc)
+        let bundledDoccPath = Bundle.main.executableURL?
+            .deletingLastPathComponent()
+            .appendingPathComponent("swift-llm-docs-docc")
+        if let bundledPath = bundledDoccPath,
+           fileManager.isExecutableFile(atPath: bundledPath.path) {
+            print("   Verifying bundled DocC...")
+            let result = try await shell(bundledPath.path, "convert", "--help")
+            if result.output.contains("enable-experimental-markdown-output") {
+                print("   ✓ Using bundled DocC")
+                return bundledPath
+            }
+        }
+
         // Check if we have a cached build
         if fileManager.isExecutableFile(atPath: doccBinaryPath.path) {
             print("   Verifying cached DocC...")
