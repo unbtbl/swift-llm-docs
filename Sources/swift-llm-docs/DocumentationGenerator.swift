@@ -323,7 +323,7 @@ struct DocumentationGenerator {
                 throw GeneratorError.doccNotExecutable(customPath)
             }
             print("   Verifying custom DocC...")
-            let result = try await shell(url.path, "convert", "--help")
+            let result = try await shell(url.path, "convert", "--help", captureOutput: true)
             guard result.output.contains("enable-experimental-markdown-output") else {
                 throw GeneratorError.doccMissingMarkdownSupport
             }
@@ -338,7 +338,7 @@ struct DocumentationGenerator {
         if let bundledPath = bundledDoccPath,
            fileManager.isExecutableFile(atPath: bundledPath.path) {
             print("   Verifying bundled DocC...")
-            let result = try await shell(bundledPath.path, "convert", "--help")
+            let result = try await shell(bundledPath.path, "convert", "--help", captureOutput: true)
             if result.output.contains("enable-experimental-markdown-output") {
                 print("   ✓ Using bundled DocC")
                 return bundledPath
@@ -348,7 +348,7 @@ struct DocumentationGenerator {
         // Check if we have a cached build
         if fileManager.isExecutableFile(atPath: doccBinaryPath.path) {
             print("   Verifying cached DocC...")
-            let result = try await shell(doccBinaryPath.path, "convert", "--help")
+            let result = try await shell(doccBinaryPath.path, "convert", "--help", captureOutput: true)
             if result.output.contains("enable-experimental-markdown-output") {
                 print("   ✓ Using cached DocC")
                 return doccBinaryPath
