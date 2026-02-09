@@ -19,7 +19,9 @@ jobs:
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
 
       - name: Set version from tag
-        run: sed -i '' "s/version: \".*\"/version: \"${{ steps.version.outputs.version }}\"/" Sources/swift-llm-docs/SwiftLLMDocs.swift
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          sed -i '' "s/version: \".*\"/version: \"${VERSION}\"/" Sources/swift-llm-docs/SwiftLLMDocs.swift
 
       - name: Build swift-llm-docs
         run: swift build -c release
